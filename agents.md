@@ -1,0 +1,1 @@
+We're using UV instead of pip for python depedency management 
