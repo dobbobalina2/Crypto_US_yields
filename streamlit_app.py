@@ -171,6 +171,7 @@ else:
         end_ts = to_utc_ts(spread_end + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))
 
         btc_daily = load_btc_daily_median(BTC_DATA_PATH, start_ts, end_ts)
+        btc_daily_full = load_btc_daily_median(BTC_DATA_PATH, None, None)
         btc_returns = add_forward_returns(btc_daily, int(forward_days))
 
         spread_ma_df = spread_series.rename(columns={spread_col: "spread_ma"}).reset_index()
@@ -354,3 +355,82 @@ else:
                         st.altair_chart(heatmap, use_container_width=True)
                 else:
                     st.info("Select at least one horizon to render the heatmap.")
+
+        st.subheader("BTC Year-Start Momentum: 5-Day Total Return > 0")
+        year_horizons = [30, 60, 90]
+        year_start_df = btc_daily_full.sort_values("date").copy()
+        year_start_df["year"] = year_start_df["date"].dt.year
+        first_five = year_start_df.groupby("year", group_keys=False).head(5)
+        year_stats = (
+            first_five.groupby("year")["median_price"]
+            .agg(first="first", fifth="last", count="size")
+            .reset_index()
+        )
+        year_stats["total_return"] = year_stats["fifth"] / year_stats["first"] - 1
+        valid_years = year_stats.loc[
+            (year_stats["total_return"] > 0) & (year_stats["count"] == 5), "year"
+        ]
+
+        if valid_years.empty:
+            st.info(
+                "No years found where the first 5 trading days had a positive total return."
+            )
+        else:
+            fifth_day = (
+                year_start_df[year_start_df["year"].isin(valid_years)]
+                .groupby("year")
+                .nth(4)
+                .reset_index()
+            )
+            base_prices = year_start_df[["date", "median_price"]].copy()
+            rows = []
+            for horizon in year_horizons:
+                horizon_returns = add_forward_returns(base_prices, int(horizon))
+                merged = fifth_day[["year", "date"]].merge(
+                    horizon_returns[["date", "forward_return"]],
+                    on="date",
+                    how="left",
+                )
+                merged["horizon"] = int(horizon)
+                rows.append(merged)
+
+            year_return_df = pd.concat(rows, ignore_index=True).dropna(
+                subset=["forward_return"]
+            )
+            if year_return_df.empty:
+                st.info(
+                    "Not enough BTC history to compute the 30/60/90d returns for those years."
+                )
+            else:
+                year_chart = (
+                    alt.Chart(year_return_df)
+                    .mark_line(point=True)
+                    .encode(
+                        x=alt.X("horizon:O", title="Forward horizon (days)"),
+                        y=alt.Y(
+                            "forward_return:Q",
+                            title="BTC forward return",
+                            axis=alt.Axis(format=".2%"),
+                        ),
+                        color=alt.Color("year:O", title="Year"),
+                        tooltip=[
+                            alt.Tooltip("year:O", title="Year"),
+                            alt.Tooltip("horizon:O", title="Horizon (days)"),
+                            alt.Tooltip(
+                                "forward_return:Q",
+                                title="Forward return",
+                                format=".2%",
+                            ),
+                            alt.Tooltip("date:T", title="5th trading day"),
+                        ],
+                    )
+                    .properties(height=380)
+                )
+                st.altair_chart(year_chart, use_container_width=True)
+                year_list = ", ".join(
+                    str(year) for year in sorted(year_return_df["year"].unique())
+                )
+                st.caption(
+                    "Years meeting the 5-day positive condition: "
+                    f"{year_list if year_list else 'n/a'}"
+                )
