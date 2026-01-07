@@ -216,14 +216,14 @@ else:
         )
 
         selected_spread = (
-            rates_df[[spread_col]].dropna().rename(columns={spread_col: "spread_value"})
+            rates_df[[spread_col]].dropna().rename(columns={spread_col: "spread_ma"})
         )
         if selected_spread.empty:
             st.warning("No spread data available for the selected configuration.")
         else:
             spread_df = selected_spread.reset_index()
             spread_df["spread_bin"] = build_fixed_width_bins(
-                spread_df["spread_value"], float(bin_width)
+                spread_df["spread_ma"], float(bin_width)
             )
             distribution_df = spread_df.merge(
                 btc_returns[["date", "forward_return"]], on="date", how="inner"
@@ -253,7 +253,7 @@ else:
                     .encode(
                         x=alt.X(
                             "spread_bin:N",
-                            title="Selected spread (pp bins)",
+                            title=f"Selected spread ({ma_window}d MA, pp bins)",
                             sort=order,
                         ),
                         y=alt.Y(
@@ -328,7 +328,7 @@ else:
                             .encode(
                                 x=alt.X(
                                     "spread_bin:N",
-                                    title="Selected spread (pp bins)",
+                                    title=f"Selected spread ({ma_window}d MA, pp bins)",
                                     sort=order,
                                 ),
                                 y=alt.Y(
