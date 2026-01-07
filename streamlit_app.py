@@ -209,22 +209,23 @@ else:
 
             st.altair_chart(scatter_zero + scatter, use_container_width=True)
 
-        st.subheader("Conditional BTC Forward Returns by Borrow-10y Spread")
+        st.subheader("Conditional BTC Forward Returns by Selected Spread")
         bin_width = st.selectbox("Spread bin width (pp)", [1.0, 2.0], index=0)
-
-        borrow_spread = (
-            df.set_index("date")["borrow_minus_yield_10y"]
-            .dropna()
-            .rename("borrow_minus_10y")
+        horizons = st.multiselect(
+            "Forward horizons (days)", [30, 60, 90, 180], default=[30, 60, 90, 180]
         )
-        if borrow_spread.empty:
-            st.warning("No borrow - 10y spread data available.")
+
+        selected_spread = (
+            rates_df[[spread_col]].dropna().rename(columns={spread_col: "spread_value"})
+        )
+        if selected_spread.empty:
+            st.warning("No spread data available for the selected configuration.")
         else:
-            borrow_df = borrow_spread.reset_index()
-            borrow_df["spread_bin"] = build_fixed_width_bins(
-                borrow_df["borrow_minus_10y"], float(bin_width)
+            spread_df = selected_spread.reset_index()
+            spread_df["spread_bin"] = build_fixed_width_bins(
+                spread_df["spread_value"], float(bin_width)
             )
-            distribution_df = borrow_df.merge(
+            distribution_df = spread_df.merge(
                 btc_returns[["date", "forward_return"]], on="date", how="inner"
             ).dropna(subset=["spread_bin", "forward_return"])
 
@@ -240,13 +241,19 @@ else:
                 order = sorted(
                     distribution_df["spread_bin"].dropna().unique(), key=bin_sort_key
                 )
+                bin_median = distribution_df.groupby("spread_bin")["forward_return"].median()
+                distribution_df = distribution_df.assign(
+                    bin_color=distribution_df["spread_bin"].map(
+                        lambda label: "#2E7D32" if bin_median.get(label, 0) > 0 else "#C62828"
+                    )
+                )
                 box = (
                     alt.Chart(distribution_df)
-                    .mark_boxplot(size=20, extent="min-max")
+                    .mark_boxplot(size=20, extent="min-max", opacity=0.85)
                     .encode(
                         x=alt.X(
                             "spread_bin:N",
-                            title="Borrow - 10y spread (pp bins)",
+                            title="Selected spread (pp bins)",
                             sort=order,
                         ),
                         y=alt.Y(
@@ -254,6 +261,7 @@ else:
                             title=f"BTC {forward_days}d forward return",
                             axis=alt.Axis(format=".2%"),
                         ),
+                        color=alt.Color("bin_color:N", scale=None, legend=None),
                         tooltip=[
                             alt.Tooltip("spread_bin:N", title="Spread bin"),
                             alt.Tooltip(
@@ -262,6 +270,10 @@ else:
                         ],
                     )
                     .properties(height=420)
+                )
+                box = box.configure_boxplot(
+                    rule=alt.MarkConfig(color="#FFFFFF"),
+                    ticks=alt.MarkConfig(color="#FFFFFF"),
                 )
 
                 win_table = (
@@ -282,3 +294,63 @@ else:
                 st.altair_chart(box, use_container_width=True)
                 st.caption("Summary stats per bin (returns in decimal form).")
                 st.dataframe(win_table, use_container_width=True)
+
+                st.subheader("Heatmap: Spread Bin vs Forward Horizon")
+                if horizons:
+                    heat_rows = []
+                    for horizon in sorted(horizons):
+                        horizon_returns = add_forward_returns(
+                            btc_daily, int(horizon)
+                        )[["date", "forward_return"]]
+                        horizon_df = spread_df.merge(
+                            horizon_returns, on="date", how="inner"
+                        ).dropna(subset=["spread_bin", "forward_return"])
+                        if horizon_df.empty:
+                            continue
+                        medians = (
+                            horizon_df.groupby("spread_bin")["forward_return"]
+                            .median()
+                            .reset_index()
+                        )
+                        medians["horizon"] = int(horizon)
+                        heat_rows.append(medians)
+
+                    if not heat_rows:
+                        st.warning("No data available for the selected horizons.")
+                    else:
+                        heat_df = pd.concat(heat_rows, ignore_index=True)
+                        heat_df["spread_bin"] = pd.Categorical(
+                            heat_df["spread_bin"], categories=order, ordered=True
+                        )
+                        heatmap = (
+                            alt.Chart(heat_df)
+                            .mark_rect()
+                            .encode(
+                                x=alt.X(
+                                    "spread_bin:N",
+                                    title="Selected spread (pp bins)",
+                                    sort=order,
+                                ),
+                                y=alt.Y(
+                                    "horizon:O",
+                                    title="Forward horizon (days)",
+                                ),
+                                color=alt.Color(
+                                    "forward_return:Q",
+                                    title="Median return",
+                                    scale=alt.Scale(scheme="redyellowgreen"),
+                                    legend=alt.Legend(format=".2%"),
+                                ),
+                                tooltip=[
+                                    alt.Tooltip("spread_bin:N", title="Spread bin"),
+                                    alt.Tooltip("horizon:O", title="Horizon (days)"),
+                                    alt.Tooltip(
+                                        "forward_return:Q", title="Median return", format=".2%"
+                                    ),
+                                ],
+                            )
+                            .properties(height=300)
+                        )
+                        st.altair_chart(heatmap, use_container_width=True)
+                else:
+                    st.info("Select at least one horizon to render the heatmap.")
